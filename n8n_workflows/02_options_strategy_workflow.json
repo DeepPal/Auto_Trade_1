@@ -1,0 +1,128 @@
+{
+  "name": "Options Strategy Signal Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "options-signal",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived"
+      },
+      "id": "webhook-trigger",
+      "name": "MCP Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "options-signal-generator"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract input parameters\nconst symbol = $input.first().json.symbol || 'NIFTY';\nconst expiry = $input.first().json.expiry || getNextExpiry();\nconst strategy = $input.first().json.strategy || 'iron_condor';\n\n// Fetch current spot price\nconst spotPrice = await fetchSpotPrice(symbol);\n\n// Calculate strikes based on strategy\nlet strikes = {};\nif (strategy === 'iron_condor') {\n  strikes = {\n    sell_ce: Math.ceil(spotPrice / 50) * 50 + 100,\n    buy_ce: Math.ceil(spotPrice / 50) * 50 + 200,\n    sell_pe: Math.floor(spotPrice / 50) * 50 - 100,\n    buy_pe: Math.floor(spotPrice / 50) * 50 - 200\n  };\n} else if (strategy === 'short_strangle') {\n  strikes = {\n    sell_ce: Math.ceil(spotPrice / 50) * 50 + 150,\n    sell_pe: Math.floor(spotPrice / 50) * 50 - 150\n  };\n}\n\n// Helper functions\nfunction getNextExpiry() {\n  const today = new Date();\n  const dayOfWeek = today.getDay();\n  const daysUntilThursday = (4 - dayOfWeek + 7) % 7 || 7;\n  const nextThursday = new Date(today);\n  nextThursday.setDate(today.getDate() + daysUntilThursday);\n  return nextThursday.toISOString().split('T')[0];\n}\n\nasync function fetchSpotPrice(symbol) {\n  // In real implementation, fetch from Redis or Kite API\n  return symbol === 'NIFTY' ? 21500 : 48000;\n}\n\nreturn {\n  symbol,\n  expiry,\n  strategy,\n  spot_price: spotPrice,\n  strikes,\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "calculate-strikes",
+      "name": "Calculate Option Strikes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fetch Greeks for all strikes\nconst strikes = $input.first().json.strikes;\nconst symbol = $input.first().json.symbol;\nconst expiry = $input.first().json.expiry;\n\nconst greeksData = [];\n\nfor (const [position, strike] of Object.entries(strikes)) {\n  const optionSymbol = `${symbol}${expiry}${strike}${position.includes('ce') ? 'CE' : 'PE'}`;\n  \n  // Simulate Greeks calculation (replace with actual API call)\n  const greeks = {\n    symbol: optionSymbol,\n    position: position,\n    strike: strike,\n    delta: Math.random() * 0.5,\n    gamma: Math.random() * 0.02,\n    theta: -(Math.random() * 50 + 20),\n    vega: Math.random() * 20,\n    iv: Math.random() * 20 + 15,\n    ltp: Math.random() * 200 + 100\n  };\n  \n  greeksData.push(greeks);\n}\n\n// Calculate aggregate Greeks for the strategy\nconst aggregateGreeks = {\n  total_delta: greeksData.reduce((sum, g) => {\n    const multiplier = g.position.includes('sell') ? -1 : 1;\n    return sum + (g.delta * multiplier);\n  }, 0),\n  total_gamma: greeksData.reduce((sum, g) => {\n    const multiplier = g.position.includes('sell') ? -1 : 1;\n    return sum + (g.gamma * multiplier);\n  }, 0),\n  total_theta: greeksData.reduce((sum, g) => {\n    const multiplier = g.position.includes('sell') ? -1 : 1;\n    return sum + (g.theta * multiplier);\n  }, 0),\n  max_profit: calculateMaxProfit(greeksData),\n  max_loss: calculateMaxLoss(greeksData)\n};\n\nfunction calculateMaxProfit(data) {\n  // Calculate based on strategy type\n  let premium = 0;\n  data.forEach(g => {\n    if (g.position.includes('sell')) premium += g.ltp;\n    if (g.position.includes('buy')) premium -= g.ltp;\n  });\n  return premium * 50; // Lot size\n}\n\nfunction calculateMaxLoss(data) {\n  // Simplified calculation\n  return -5000; // Replace with actual calculation\n}\n\nreturn {\n  ...$input.first().json,\n  greeks: greeksData,\n  aggregate_greeks: aggregateGreeks\n};"
+      },
+      "id": "calculate-greeks",
+      "name": "Calculate Greeks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Multi-layer scoring system\nconst data = $input.first().json;\nconst scores = [];\n\n// Layer 1: Greeks Score (30% weight)\nlet greeksScore = 0;\nif (Math.abs(data.aggregate_greeks.total_delta) < 0.1) greeksScore += 30;\nif (data.aggregate_greeks.total_theta > 50) greeksScore += 30;\nif (Math.abs(data.aggregate_greeks.total_gamma) < 0.01) greeksScore += 20;\nif (data.greeks[0].iv > 18) greeksScore += 20; // High IV\nscores.push({ layer: 'greeks', score: greeksScore, weight: 0.30 });\n\n// Layer 2: Technical Score (40% weight)\nlet technicalScore = 0;\n// Simulate technical indicators\nconst rsi = 45; // Neutral\nconst macd = 0.5; // Slightly bullish\nif (rsi > 30 && rsi < 70) technicalScore += 40;\nif (macd > 0) technicalScore += 30;\ntechnicalScore += 30; // Support/Resistance check\nscores.push({ layer: 'technical', score: technicalScore, weight: 0.40 });\n\n// Layer 3: Market Sentiment (20% weight)\nlet sentimentScore = 0;\nconst vix = 15; // Simulated\nconst pcr = 0.8; // Put-Call Ratio\nif (vix > 15 && vix < 25) sentimentScore += 50; // Good for selling\nif (pcr > 0.7 && pcr < 1.3) sentimentScore += 50; // Neutral sentiment\nscores.push({ layer: 'sentiment', score: sentimentScore, weight: 0.20 });\n\n// Layer 4: Risk Score (10% weight)\nlet riskScore = 100; // Start at 100\nconst riskRewardRatio = Math.abs(data.aggregate_greeks.max_profit / data.aggregate_greeks.max_loss);\nif (riskRewardRatio < 0.5) riskScore -= 50;\nif (Math.abs(data.aggregate_greeks.total_delta) > 0.2) riskScore -= 30;\nscores.push({ layer: 'risk', score: riskScore, weight: 0.10 });\n\n// Calculate weighted total\nconst totalScore = scores.reduce((sum, s) => sum + (s.score * s.weight), 0);\n\n// Generate signal\nlet signal = 'WAIT';\nlet positionSize = 0;\n\nif (totalScore >= 75) {\n  signal = 'STRONG_ENTRY';\n  positionSize = 2; // lots\n} else if (totalScore >= 65) {\n  signal = 'ENTRY';\n  positionSize = 1; // lot\n} else if (totalScore >= 55) {\n  signal = 'WEAK_ENTRY';\n  positionSize = 1; // lot with tight stop\n}\n\nreturn {\n  ...data,\n  scoring: {\n    layers: scores,\n    total_score: totalScore,\n    signal: signal,\n    position_size: positionSize,\n    confidence: `${totalScore.toFixed(1)}%`\n  },\n  recommendation: {\n    action: signal,\n    lots: positionSize,\n    stop_loss: data.aggregate_greeks.max_loss * 1.5,\n    target_1: data.aggregate_greeks.max_profit * 0.5,\n    target_2: data.aggregate_greeks.max_profit * 0.75\n  }\n};"
+      },
+      "id": "multi-layer-scoring",
+      "name": "Multi-Layer Scoring",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "trading.signals",
+        "columns": "strategy_id,symbol,signal_type,strength,metadata",
+        "additionalFields": {}
+      },
+      "id": "store-signal",
+      "name": "Store Signal in DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1050, 300],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "Trading DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.scoring.signal}}",
+              "operation": "notEqual",
+              "value2": "WAIT"
+            }
+          ]
+        }
+      },
+      "id": "check-signal",
+      "name": "Check If Tradeable",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendText",
+        "chatId": "={{$credentials.telegram.chatId}}",
+        "text": "🎯 *Options Signal Alert*\\n\\n*Symbol:* {{$json.symbol}}\\n*Strategy:* {{$json.strategy}}\\n*Signal:* {{$json.scoring.signal}}\\n*Confidence:* {{$json.scoring.confidence}}\\n*Position Size:* {{$json.recommendation.lots}} lots\\n\\n*Entry Strikes:*\\n{{$json.strikes}}\\n\\n*Risk Management:*\\nStop Loss: ₹{{$json.recommendation.stop_loss}}\\nTarget 1: ₹{{$json.recommendation.target_1}}\\nTarget 2: ₹{{$json.recommendation.target_2}}"
+      },
+      "id": "send-alert",
+      "name": "Send Telegram Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1450, 250],
+      "credentials": {
+        "telegramApi": {
+          "id": "2",
+          "name": "Trading Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "MCP Webhook Trigger": {
+      "main": [[{"node": "Calculate Option Strikes", "type": "main", "index": 0}]]
+    },
+    "Calculate Option Strikes": {
+      "main": [[{"node": "Calculate Greeks", "type": "main", "index": 0}]]
+    },
+    "Calculate Greeks": {
+      "main": [[{"node": "Multi-Layer Scoring", "type": "main", "index": 0}]]
+    },
+    "Multi-Layer Scoring": {
+      "main": [[{"node": "Store Signal in DB", "type": "main", "index": 0}]]
+    },
+    "Store Signal in DB": {
+      "main": [[{"node": "Check If Tradeable", "type": "main", "index": 0}]]
+    },
+    "Check If Tradeable": {
+      "main": [
+        [{"node": "Send Telegram Alert", "type": "main", "index": 0}],
+        []
+      ]
+    }
+  }
+}

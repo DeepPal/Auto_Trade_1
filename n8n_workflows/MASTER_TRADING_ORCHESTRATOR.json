@@ -1,0 +1,193 @@
+{
+  "name": "🎯 MASTER Trading Orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "cronExpression": "*/1 9-16 * * 1-5"
+        }
+      },
+      "id": "6e8b8c3f-1234-5678-90ab-cdef12345678",
+      "name": "Market Hours Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "notes": "Runs every minute during market hours (9 AM - 4 PM IST, Mon-Fri)"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.kite.trade/quote",
+        "authentication": "headerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Kite-Version",
+              "value": "3"
+            },
+            {
+              "name": "Authorization",
+              "value": "token {{$node['Get Access Token'].json.access_token}}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "i",
+              "value": "NSE:NIFTY BANK,NSE:NIFTY 50"
+            }
+          ]
+        }
+      },
+      "id": "market-data-fetcher",
+      "name": "Fetch Market Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and analyze market data\nconst marketData = $input.first().json;\nconst niftyData = marketData['NSE:NIFTY 50'];\nconst bankNiftyData = marketData['NSE:NIFTY BANK'];\n\n// Calculate key metrics\nconst niftyChange = ((niftyData.last_price - niftyData.ohlc.close) / niftyData.ohlc.close * 100).toFixed(2);\nconst bankNiftyChange = ((bankNiftyData.last_price - bankNiftyData.ohlc.close) / bankNiftyData.ohlc.close * 100).toFixed(2);\n\n// Determine market trend\nlet marketTrend = 'NEUTRAL';\nif (niftyChange > 0.5) marketTrend = 'BULLISH';\nelse if (niftyChange < -0.5) marketTrend = 'BEARISH';\n\n// Volume analysis\nconst volumeStrength = niftyData.volume > niftyData.average_volume ? 'HIGH' : 'NORMAL';\n\nreturn {\n  timestamp: new Date().toISOString(),\n  indices: {\n    nifty: {\n      price: niftyData.last_price,\n      change_percent: niftyChange,\n      volume: niftyData.volume,\n      high: niftyData.ohlc.high,\n      low: niftyData.ohlc.low\n    },\n    bankNifty: {\n      price: bankNiftyData.last_price,\n      change_percent: bankNiftyChange,\n      volume: bankNiftyData.volume,\n      high: bankNiftyData.ohlc.high,\n      low: bankNiftyData.ohlc.low\n    }\n  },\n  analysis: {\n    trend: marketTrend,\n    volumeStrength: volumeStrength,\n    volatility: Math.abs(niftyChange) > 1 ? 'HIGH' : 'NORMAL'\n  }\n};"
+      },
+      "id": "analyze-market",
+      "name": "Analyze Market Conditions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "workflowId": "={{$parameter['strategy_workflow_id']}}",
+        "workflowData": "={{ JSON.stringify($json) }}"
+      },
+      "id": "execute-strategies",
+      "name": "Execute Strategy Workflows",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1050, 300],
+      "notes": "Calls individual strategy workflows (Iron Condor, Strangle, etc.)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.signal_score}}",
+              "operation": "largerEqual",
+              "value2": 70
+            }
+          ],
+          "string": [
+            {
+              "value1": "={{$json.risk_check}}",
+              "operation": "equals",
+              "value2": "PASS"
+            }
+          ]
+        }
+      },
+      "id": "signal-validator",
+      "name": "Validate Trading Signal",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH portfolio_check AS (\n  SELECT \n    COUNT(*) as open_positions,\n    COALESCE(SUM(CASE WHEN pnl < 0 THEN pnl ELSE 0 END), 0) as daily_loss\n  FROM trading.orders\n  WHERE DATE(placed_at) = CURRENT_DATE\n    AND status IN ('OPEN', 'PENDING')\n)\nSELECT \n  open_positions,\n  daily_loss,\n  CASE \n    WHEN open_positions >= 5 THEN 'MAX_POSITIONS_REACHED'\n    WHEN ABS(daily_loss) > 30000 THEN 'DAILY_LOSS_LIMIT'\n    ELSE 'OK_TO_TRADE'\n  END as risk_status\nFROM portfolio_check;"
+      },
+      "id": "risk-check",
+      "name": "Risk Management Check",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1450, 250],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "Trading DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": "order_execution_workflow_id",
+        "workflowData": "={{ JSON.stringify($json) }}"
+      },
+      "id": "place-order",
+      "name": "Place Order Workflow",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1650, 200]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "trading.signals",
+        "columns": "symbol,signal_type,strength,metadata,created_at",
+        "additionalFields": {}
+      },
+      "id": "log-signal",
+      "name": "Log Signal to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1450, 400],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "Trading DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendText",
+        "chatId": "={{$credentials.telegram.chatId}}",
+        "text": "🎯 **Trading Alert**\\n\\nSignal: {{$json.signal_type}}\\nSymbol: {{$json.symbol}}\\nScore: {{$json.signal_score}}\\nAction: {{$json.action}}\\n\\nRisk Status: {{$json.risk_status}}"
+      },
+      "id": "send-alert",
+      "name": "Send Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1650, 400]
+    }
+  ],
+  "connections": {
+    "Market Hours Trigger": {
+      "main": [[{"node": "Fetch Market Data", "type": "main", "index": 0}]]
+    },
+    "Fetch Market Data": {
+      "main": [[{"node": "Analyze Market Conditions", "type": "main", "index": 0}]]
+    },
+    "Analyze Market Conditions": {
+      "main": [[{"node": "Execute Strategy Workflows", "type": "main", "index": 0}]]
+    },
+    "Execute Strategy Workflows": {
+      "main": [[{"node": "Validate Trading Signal", "type": "main", "index": 0}]]
+    },
+    "Validate Trading Signal": {
+      "main": [
+        [{"node": "Risk Management Check", "type": "main", "index": 0}],
+        [{"node": "Log Signal to Database", "type": "main", "index": 0}]
+      ]
+    },
+    "Risk Management Check": {
+      "main": [[
+        {"node": "Place Order Workflow", "type": "main", "index": 0},
+        {"node": "Send Alert", "type": "main", "index": 0}
+      ]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "error_handler_workflow_id"
+  }
+}

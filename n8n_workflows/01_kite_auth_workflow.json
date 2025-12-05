@@ -1,0 +1,96 @@
+{
+  "name": "Kite Authentication Manager",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "cronExpression": "0 9 * * 1-5"
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Market Open Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.kite.trade/session/token",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{$credentials.kiteApi.apiKey}}"
+            },
+            {
+              "name": "request_token",
+              "value": "={{$node['Get Request Token'].json.request_token}}"
+            },
+            {
+              "name": "checksum",
+              "value": "={{$node['Generate Checksum'].json.checksum}}"
+            }
+          ]
+        }
+      },
+      "id": "generate-access-token",
+      "name": "Generate Access Token",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO trading.auth_tokens (token_type, token_value, expires_at) VALUES ('kite_access', '{{$node['Generate Access Token'].json.data.access_token}}', NOW() + INTERVAL '8 hours') ON CONFLICT (token_type) DO UPDATE SET token_value = EXCLUDED.token_value, expires_at = EXCLUDED.expires_at, updated_at = NOW();"
+      },
+      "id": "store-token",
+      "name": "Store Token in DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [850, 300],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "Trading DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "status",
+              "value": "Token refreshed successfully"
+            },
+            {
+              "name": "timestamp",
+              "value": "={{$now.toISO()}}"
+            }
+          ]
+        }
+      },
+      "id": "success-response",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    }
+  ],
+  "connections": {
+    "Market Open Schedule": {
+      "main": [[{"node": "Generate Access Token", "type": "main", "index": 0}]]
+    },
+    "Generate Access Token": {
+      "main": [[{"node": "Store Token in DB", "type": "main", "index": 0}]]
+    },
+    "Store Token in DB": {
+      "main": [[{"node": "Success Response", "type": "main", "index": 0}]]
+    }
+  }
+}

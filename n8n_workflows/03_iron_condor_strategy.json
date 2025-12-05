@@ -1,0 +1,133 @@
+{
+  "name": "🦅 Iron Condor Strategy",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "iron-condor-signal",
+        "responseMode": "onReceived",
+        "responseData": "={{ JSON.stringify({status: 'processing', timestamp: $now.toISO()}) }}",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Strategy Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "iron-condor-strategy"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Iron Condor Strike Selection Algorithm\nconst spotPrice = $input.first().json.spot_price || 21500;\nconst symbol = $input.first().json.symbol || 'NIFTY';\nconst expiry = getNextExpiry();\n\n// Calculate strikes for Iron Condor\n// Typical structure: Sell OTM Call, Buy Further OTM Call, Sell OTM Put, Buy Further OTM Put\nconst strikeInterval = symbol === 'NIFTY' ? 50 : 100;\nconst atmStrike = Math.round(spotPrice / strikeInterval) * strikeInterval;\n\nconst strikes = {\n  shortCall: atmStrike + (strikeInterval * 3),  // 3 strikes OTM\n  longCall: atmStrike + (strikeInterval * 5),   // 5 strikes OTM\n  shortPut: atmStrike - (strikeInterval * 3),   // 3 strikes OTM\n  longPut: atmStrike - (strikeInterval * 5)     // 5 strikes OTM\n};\n\n// Calculate margin requirement\nconst marginRequired = calculateMargin(strikes, spotPrice);\n\n// Calculate max profit and loss\nconst maxProfit = calculateMaxProfit(strikes);\nconst maxLoss = calculateMaxLoss(strikes);\n\nfunction getNextExpiry() {\n  const today = new Date();\n  const dayOfWeek = today.getDay();\n  const daysUntilThursday = (4 - dayOfWeek + 7) % 7 || 7;\n  const nextThursday = new Date(today);\n  nextThursday.setDate(today.getDate() + daysUntilThursday);\n  \n  return nextThursday.toISOString().split('T')[0].replace(/-/g, '');\n}\n\nfunction calculateMargin(strikes, spot) {\n  // Simplified margin calculation\n  const spread = strikes.longCall - strikes.shortCall;\n  return spread * 50 * 2; // 50 is lot size, 2 for both spreads\n}\n\nfunction calculateMaxProfit(strikes) {\n  // Premium collected - Premium paid\n  return 5000; // Placeholder - fetch actual premiums\n}\n\nfunction calculateMaxLoss(strikes) {\n  const spread = strikes.longCall - strikes.shortCall;\n  return (spread * 50) - calculateMaxProfit(strikes);\n}\n\nreturn {\n  strategy: 'IRON_CONDOR',\n  symbol: symbol,\n  expiry: expiry,\n  spot_price: spotPrice,\n  strikes: strikes,\n  margin_required: marginRequired,\n  max_profit: maxProfit,\n  max_loss: maxLoss,\n  risk_reward_ratio: (maxProfit / Math.abs(maxLoss)).toFixed(2),\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "calculate-strikes",
+      "name": "Calculate Iron Condor Strikes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.kite.trade/quote/ltp",
+        "authentication": "headerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "token {{$credentials.kite.access_token}}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "i",
+              "value": "={{$json.strikes.shortCall}}CE,{{$json.strikes.longCall}}CE,{{$json.strikes.shortPut}}PE,{{$json.strikes.longPut}}PE"
+            }
+          ]
+        }
+      },
+      "id": "fetch-option-prices",
+      "name": "Fetch Option Prices",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate Greeks and scoring for Iron Condor\nconst data = $input.first().json;\nconst optionPrices = data.option_prices;\nconst strikes = data.strikes;\n\n// Score calculation based on multiple factors\nlet score = 0;\nconst factors = [];\n\n// 1. Premium Collection (30 points)\nconst netPremium = calculateNetPremium(optionPrices);\nif (netPremium > 2000) {\n  score += 30;\n  factors.push({factor: 'Premium Collection', score: 30, status: 'GOOD'});\n} else if (netPremium > 1000) {\n  score += 20;\n  factors.push({factor: 'Premium Collection', score: 20, status: 'MODERATE'});\n} else {\n  score += 10;\n  factors.push({factor: 'Premium Collection', score: 10, status: 'LOW'});\n}\n\n// 2. Probability of Profit (30 points)\nconst pop = calculateProbabilityOfProfit(strikes, data.spot_price);\nif (pop > 0.70) {\n  score += 30;\n  factors.push({factor: 'Probability of Profit', score: 30, value: pop});\n} else if (pop > 0.60) {\n  score += 20;\n  factors.push({factor: 'Probability of Profit', score: 20, value: pop});\n} else {\n  score += 10;\n  factors.push({factor: 'Probability of Profit', score: 10, value: pop});\n}\n\n// 3. IV Rank (20 points)\nconst ivRank = data.iv_rank || 50; // Get from market data\nif (ivRank > 60) {\n  score += 20;\n  factors.push({factor: 'IV Rank', score: 20, value: ivRank, status: 'HIGH'});\n} else if (ivRank > 40) {\n  score += 15;\n  factors.push({factor: 'IV Rank', score: 15, value: ivRank, status: 'MODERATE'});\n} else {\n  score += 5;\n  factors.push({factor: 'IV Rank', score: 5, value: ivRank, status: 'LOW'});\n}\n\n// 4. Days to Expiry (20 points)\nconst daysToExpiry = calculateDaysToExpiry(data.expiry);\nif (daysToExpiry >= 7 && daysToExpiry <= 15) {\n  score += 20;\n  factors.push({factor: 'Days to Expiry', score: 20, value: daysToExpiry, status: 'OPTIMAL'});\n} else if (daysToExpiry >= 5 && daysToExpiry <= 20) {\n  score += 15;\n  factors.push({factor: 'Days to Expiry', score: 15, value: daysToExpiry, status: 'ACCEPTABLE'});\n} else {\n  score += 5;\n  factors.push({factor: 'Days to Expiry', score: 5, value: daysToExpiry, status: 'SUBOPTIMAL'});\n}\n\nfunction calculateNetPremium(prices) {\n  // Simplified calculation\n  return 2500; // Placeholder\n}\n\nfunction calculateProbabilityOfProfit(strikes, spot) {\n  // Statistical calculation based on standard deviation\n  const distance = Math.min(\n    Math.abs(strikes.shortCall - spot),\n    Math.abs(strikes.shortPut - spot)\n  );\n  const percentDistance = distance / spot;\n  \n  // Simplified probability calculation\n  return 0.65 + (percentDistance * 2);\n}\n\nfunction calculateDaysToExpiry(expiryDate) {\n  const expiry = new Date(expiryDate);\n  const today = new Date();\n  return Math.floor((expiry - today) / (1000 * 60 * 60 * 24));\n}\n\n// Generate recommendation\nlet recommendation = 'WAIT';\nlet confidence = 'LOW';\n\nif (score >= 80) {\n  recommendation = 'EXECUTE';\n  confidence = 'HIGH';\n} else if (score >= 65) {\n  recommendation = 'EXECUTE';\n  confidence = 'MEDIUM';\n} else if (score >= 50) {\n  recommendation = 'MONITOR';\n  confidence = 'LOW';\n}\n\nreturn {\n  ...data,\n  scoring: {\n    total_score: score,\n    max_score: 100,\n    factors: factors,\n    confidence: confidence\n  },\n  recommendation: recommendation,\n  position_details: {\n    net_premium: netPremium,\n    probability_of_profit: (pop * 100).toFixed(1) + '%',\n    days_to_expiry: daysToExpiry,\n    iv_rank: ivRank\n  }\n};"
+      },
+      "id": "calculate-score",
+      "name": "Calculate Strategy Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "trading.signals",
+        "columns": "strategy_id,symbol,signal_type,strength,metadata",
+        "additionalFields": {}
+      },
+      "id": "store-signal",
+      "name": "Store Signal",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "signal_type",
+              "value": "IRON_CONDOR"
+            },
+            {
+              "name": "action",
+              "value": "={{$json.recommendation}}"
+            }
+          ],
+          "number": [
+            {
+              "name": "signal_score",
+              "value": "={{$json.scoring.total_score}}"
+            }
+          ],
+          "boolean": [
+            {
+              "name": "tradeable",
+              "value": "={{$json.scoring.total_score >= 65}}"
+            }
+          ]
+        }
+      },
+      "id": "prepare-response",
+      "name": "Prepare Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    }
+  ],
+  "connections": {
+    "Strategy Trigger": {
+      "main": [[{"node": "Calculate Iron Condor Strikes", "type": "main", "index": 0}]]
+    },
+    "Calculate Iron Condor Strikes": {
+      "main": [[{"node": "Fetch Option Prices", "type": "main", "index": 0}]]
+    },
+    "Fetch Option Prices": {
+      "main": [[{"node": "Calculate Strategy Score", "type": "main", "index": 0}]]
+    },
+    "Calculate Strategy Score": {
+      "main": [[{"node": "Store Signal", "type": "main", "index": 0}]]
+    },
+    "Store Signal": {
+      "main": [[{"node": "Prepare Response", "type": "main", "index": 0}]]
+    }
+  }
+}
