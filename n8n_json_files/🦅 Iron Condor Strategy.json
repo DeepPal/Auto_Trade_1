@@ -1,0 +1,211 @@
+{
+  "name": "🦅 Iron Condor Strategy",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "iron-condor-signal",
+        "options": {}
+      },
+      "id": "1218e275-3a38-468c-96cb-3cf40ca78091",
+      "name": "Strategy Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "iron-condor-strategy"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Iron Condor Strike Selection Algorithm with input validation\nconst payload = $input.first()?.json || {};\n\nif (!payload.symbol || !payload.spot_price) {\n  throw new Error('Missing required fields: symbol, spot_price');\n}\n\nconst spotPrice = Number(payload.spot_price);\nconst symbol = String(payload.symbol).toUpperCase();\nconst expiry = payload.expiry || getNextExpiry();\n\n// Calculate strikes for Iron Condor\nconst strikeInterval = symbol === 'NIFTY' ? 50 : 100;\nconst atmStrike = Math.round(spotPrice / strikeInterval) * strikeInterval;\n\nconst strikes = {\n  shortCall: atmStrike + (strikeInterval * 3),\n  longCall: atmStrike + (strikeInterval * 5),\n  shortPut: atmStrike - (strikeInterval * 3),\n  longPut: atmStrike - (strikeInterval * 5)\n};\n\n// Calculate margin requirement\nconst marginRequired = calculateMargin(strikes, spotPrice);\n\n// Calculate max profit and loss (placeholder premium model)\nconst maxProfit = calculateMaxProfit(strikes);\nconst maxLoss = calculateMaxLoss(strikes);\n\nfunction getNextExpiry() {\n  const today = new Date();\n  const dayOfWeek = today.getDay();\n  const daysUntilThursday = (4 - dayOfWeek + 7) % 7 || 7;\n  const nextThursday = new Date(today);\n  nextThursday.setDate(today.getDate() + daysUntilThursday);\n  return nextThursday.toISOString().split('T')[0].replace(/-/g, '');\n}\n\nfunction calculateMargin(strikes, spot) {\n  const spread = strikes.longCall - strikes.shortCall;\n  return Math.max(spread, 0) * 50 * 2; // lot size 50, both sides\n}\n\nfunction calculateMaxProfit(strikes) {\n  return 5000; // TODO: replace with real premium calc\n}\n\nfunction calculateMaxLoss(strikes) {\n  const spread = strikes.longCall - strikes.shortCall;\n  return Math.max(spread, 0) * 50 - calculateMaxProfit(strikes);\n}\n\nreturn {\n  strategy: 'IRON_CONDOR',\n  symbol,\n  expiry,\n  spot_price: spotPrice,\n  strikes,\n  margin_required: marginRequired,\n  max_profit: maxProfit,\n  max_loss: maxLoss,\n  risk_reward_ratio: maxLoss !== 0 ? (maxProfit / Math.abs(maxLoss)).toFixed(2) : '0',\n  paper: Boolean(payload.paper),\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "a3a1a7c0-e929-41a1-9fff-f6073a94c020",
+      "name": "Calculate Iron Condor Strikes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.kite.trade/quote/ltp",
+        "authentication": "headerAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "i",
+              "value": "={{$json.strikes.shortCall}}CE,{{$json.strikes.longCall}}CE,{{$json.strikes.shortPut}}PE,{{$json.strikes.longPut}}PE"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "token {{$credentials.kite.access_token}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "161e27f3-7ede-4500-a30f-6bfa53ce3aa4",
+      "name": "Fetch Option Prices",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate Greeks and scoring for Iron Condor\nconst data = $input.first().json;\nconst optionPrices = data.data || data.option_prices || {};\nconst strikes = data.strikes;\n\n// Score calculation based on multiple factors\nlet score = 0;\nconst factors = [];\n\n// 1. Premium Collection (30 points)\nconst netPremium = calculateNetPremium(optionPrices);\nif (netPremium > 2000) {\n  score += 30;\n  factors.push({factor: 'Premium Collection', score: 30, status: 'GOOD'});\n} else if (netPremium > 1000) {\n  score += 20;\n  factors.push({factor: 'Premium Collection', score: 20, status: 'MODERATE'});\n} else {\n  score += 10;\n  factors.push({factor: 'Premium Collection', score: 10, status: 'LOW'});\n}\n\n// 2. Probability of Profit (30 points)\nconst pop = calculateProbabilityOfProfit(strikes, data.spot_price);\nif (pop > 0.70) {\n  score += 30;\n  factors.push({factor: 'Probability of Profit', score: 30, value: pop});\n} else if (pop > 0.60) {\n  score += 20;\n  factors.push({factor: 'Probability of Profit', score: 20, value: pop});\n} else {\n  score += 10;\n  factors.push({factor: 'Probability of Profit', score: 10, value: pop});\n}\n\n// 3. IV Rank (20 points)\nconst ivRank = data.iv_rank || 50;\nif (ivRank > 60) {\n  score += 20;\n  factors.push({factor: 'IV Rank', score: 20, value: ivRank, status: 'HIGH'});\n} else if (ivRank > 40) {\n  score += 15;\n  factors.push({factor: 'IV Rank', score: 15, value: ivRank, status: 'MODERATE'});\n} else {\n  score += 5;\n  factors.push({factor: 'IV Rank', score: 5, value: ivRank, status: 'LOW'});\n}\n\n// 4. Days to Expiry (20 points)\nconst daysToExpiry = calculateDaysToExpiry(data.expiry);\nif (daysToExpiry >= 7 && daysToExpiry <= 15) {\n  score += 20;\n  factors.push({factor: 'Days to Expiry', score: 20, value: daysToExpiry, status: 'OPTIMAL'});\n} else if (daysToExpiry >= 5 && daysToExpiry <= 20) {\n  score += 15;\n  factors.push({factor: 'Days to Expiry', score: 15, value: daysToExpiry, status: 'ACCEPTABLE'});\n} else {\n  score += 5;\n  factors.push({factor: 'Days to Expiry', score: 5, value: daysToExpiry, status: 'SUBOPTIMAL'});\n}\n\nfunction calculateNetPremium(prices) {\n  // Placeholder premium calc\n  return 2500;\n}\n\nfunction calculateProbabilityOfProfit(strikes, spot) {\n  const distance = Math.min(\n    Math.abs(strikes.shortCall - spot),\n    Math.abs(strikes.shortPut - spot)\n  );\n  const percentDistance = distance / spot;\n  return 0.65 + (percentDistance * 2);\n}\n\nfunction calculateDaysToExpiry(expiryDate) {\n  const expiry = new Date(expiryDate);\n  const today = new Date();\n  return Math.max(0, Math.floor((expiry - today) / (1000 * 60 * 60 * 24)));\n}\n\n// Generate recommendation\nlet recommendation = 'WAIT';\nlet confidence = 'LOW';\n\nif (score >= 80) {\n  recommendation = 'EXECUTE';\n  confidence = 'HIGH';\n} else if (score >= 70) {\n  recommendation = 'EXECUTE';\n  confidence = 'MEDIUM';\n} else if (score >= 55) {\n  recommendation = 'MONITOR';\n  confidence = 'LOW';\n}\n\nreturn {\n  ...data,\n  scoring: {\n    total_score: score,\n    max_score: 100,\n    factors,\n    confidence\n  },\n  recommendation,\n  position_details: {\n    net_premium: netPremium,\n    probability_of_profit: (pop * 100).toFixed(1) + '%',\n    days_to_expiry: daysToExpiry,\n    iv_rank: ivRank\n  }\n};"
+      },
+      "id": "49f2e8be-55e9-48c5-b3ba-57a29ca42363",
+      "name": "Calculate Strategy Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        608,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": "trading.signals",
+        "options": {}
+      },
+      "id": "46c91102-0c33-4790-b406-e9e3ab557aec",
+      "name": "Store Signal",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        800,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "signal_type",
+              "value": "IRON_CONDOR"
+            },
+            {
+              "name": "action",
+              "value": "={{$json.recommendation}}"
+            },
+            {
+              "name": "symbol",
+              "value": "={{$json.symbol}}"
+            },
+            {
+              "name": "expiry",
+              "value": "={{$json.expiry}}"
+            }
+          ],
+          "number": [
+            {
+              "name": "signal_score",
+              "value": "={{$json.scoring.total_score}}"
+            }
+          ],
+          "boolean": [
+            {
+              "name": "tradeable",
+              "value": "={{$json.scoring.total_score >= 70}}"
+            }
+          ]
+        }
+      },
+      "id": "b5189ab9-2d9d-49b2-a4f8-757810853fc1",
+      "name": "Prepare Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Strategy Trigger": {
+      "main": [
+        [
+          {
+            "node": "Calculate Iron Condor Strikes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Iron Condor Strikes": {
+      "main": [
+        [
+          {
+            "node": "Fetch Option Prices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Option Prices": {
+      "main": [
+        [
+          {
+            "node": "Calculate Strategy Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Strategy Score": {
+      "main": [
+        [
+          {
+            "node": "Store Signal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Signal": {
+      "main": [
+        [
+          {
+            "node": "Prepare Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "4668f7ab-080d-4ec0-9e4d-f24a602f54c9",
+  "meta": {
+    "instanceId": "c599930d4442d2cacde666b9b0f3201bd20e98b8419385c727a40a09413acdaa"
+  },
+  "id": "jiOoss5QzXXlGPiD",
+  "tags": []
+}

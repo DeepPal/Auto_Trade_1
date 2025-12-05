@@ -1,0 +1,95 @@
+{
+  "name": "🧪 TEST - Simple Trading Signal",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "test-signal",
+        "options": {}
+      },
+      "id": "43ebcd65-359b-457b-9d05-b69bab2417d7",
+      "name": "Test Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "test-signal-webhook",
+      "notes": "Test endpoint: POST http://localhost:5678/webhook/test-signal"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Simple signal generation for testing\nconst input = $input.first().json;\n\n// Generate random scores for testing\nconst technicalScore = Math.floor(Math.random() * 40) + 60; // 60-100\nconst greeksScore = Math.floor(Math.random() * 30) + 70; // 70-100\nconst sentimentScore = Math.floor(Math.random() * 20) + 80; // 80-100\n\nconst totalScore = (technicalScore * 0.4 + greeksScore * 0.3 + sentimentScore * 0.3);\n\nconst signal = totalScore >= 70 ? 'BUY' : 'WAIT';\nconst strategy = input.strategy || 'IRON_CONDOR';\nconst symbol = input.symbol || 'NIFTY';\n\nreturn {\n  test_mode: true,\n  timestamp: new Date().toISOString(),\n  symbol: symbol,\n  strategy: strategy,\n  scores: {\n    technical: technicalScore,\n    greeks: greeksScore,\n    sentiment: sentimentScore,\n    total: totalScore.toFixed(2)\n  },\n  signal: signal,\n  recommendation: signal === 'BUY' ? \n    `Execute ${strategy} on ${symbol}` : \n    `Wait for better opportunity on ${symbol}`,\n  mock_order: signal === 'BUY' ? {\n    symbol: `${symbol}24DEC21500CE`,\n    quantity: 50,\n    order_type: 'LIMIT',\n    price: 150,\n    strategy: strategy\n  } : null\n};"
+      },
+      "id": "651563f2-1ced-4c89-97ef-c09b84ca18f9",
+      "name": "Generate Test Signal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "status",
+              "value": "success"
+            },
+            {
+              "name": "message",
+              "value": "Test signal generated successfully"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "caa76b27-3e97-413f-8d20-ca6055ce9d82",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Test Webhook": {
+      "main": [
+        [
+          {
+            "node": "Generate Test Signal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Test Signal": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "965b0b96-43eb-4e31-9daf-970ff4b27617",
+  "meta": {
+    "instanceId": "c599930d4442d2cacde666b9b0f3201bd20e98b8419385c727a40a09413acdaa"
+  },
+  "id": "7Ur3wlOM0iioEsMe",
+  "tags": []
+}

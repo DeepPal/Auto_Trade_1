@@ -1,0 +1,143 @@
+{
+  "name": "MASTER Trading Orchestrator",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "5e4c695a-6944-402a-829f-c4aded010ccf",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        176,
+        -96
+      ],
+      "id": "fc37620d-9baf-4e70-b3f3-3b543f5fc6b7",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  COUNT(*) AS trade_count,\n  CASE\n    WHEN COUNT(*) >= 3 THEN 'MAX_TRADES_REACHED'\n    ELSE 'OK_TO_TRADE'\n  END AS risk_status\nFROM trading.orders\nWHERE DATE(placed_at) = CURRENT_DATE\n  AND status IN ('OPEN', 'PENDING', 'EXECUTED')",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        16,
+        144
+      ],
+      "id": "cc9d469e-2ccb-499f-ae9d-5a80a930f87a",
+      "name": "Execute a SQL query",
+      "credentials": {
+        "postgres": {
+          "id": "gYoKZ20Kp7YGFFAf",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "chat"
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        144
+      ],
+      "id": "c77230af-46fb-4cfd-bdcb-d26a9a3817fa",
+      "name": "Get a chat",
+      "webhookId": "141d9e81-337b-4adf-b3b2-7336b1827c2e"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9320be67-6499-4d9c-a7d5-2e78e7462676",
+              "leftValue": "=$json[\"risk_status\"]",
+              "rightValue": "OK_TO_TRADE",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        368,
+        288
+      ],
+      "id": "798fec0e-9e33-40b4-a61b-7e3af91f759f",
+      "name": "If"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute a SQL query": {
+      "main": [
+        [
+          {
+            "node": "Get a chat",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionTimeout": -1,
+    "availableInMCP": false
+  },
+  "versionId": "97a0578d-529a-4e40-8ed4-27fad0b69f5c",
+  "meta": {
+    "instanceId": "c599930d4442d2cacde666b9b0f3201bd20e98b8419385c727a40a09413acdaa"
+  },
+  "id": "ylxRhZwvRTxEbqbG",
+  "tags": []
+}
